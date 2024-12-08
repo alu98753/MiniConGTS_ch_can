@@ -1,6 +1,8 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
+from collections import defaultdict
+import math
 
 class Metric():
     '''评价指标 precision recall f1'''
@@ -28,6 +30,12 @@ class Metric():
         
         self.intensities = intensities  # 真實值
         self.predicted_intensities = predicted_intensities  # 預測值
+        self.epochcount = 0
+        
+        # print(np.array(all_intensities).shape) # (907, 1, 2)
+        # print(np.array(all_intensity_logits).shape) # (907, 80, 80, 2)
+
+        
 
     def get_spans(self, tags, length, token_range, type):
         spans = []
@@ -100,7 +108,7 @@ class Metric():
     #     return triplets
 
     
-    def find_triplet(self, tag, ws, tokenized):
+    def find_triplet(self, id , tag, ws, tokenized ,intensity_pred_matrix):
         triplets = []
         # print(f"調試：tag 矩陣\n{tag}")
         # print(f"調試：tokens_ranges={ws}")
@@ -132,7 +140,7 @@ class Metric():
                                 condition2 = False
                                 
                     #目標： 確保 aspect 的 tokens 不包含停用詞（stop_words）
-                    condition3 = True
+                    # condition3 = True
                     # for tk in tokenized[al: ar+1]:
                     #     # print(tk)
                     #     if tk in self.stop_words:
@@ -140,21 +148,27 @@ class Metric():
                     #         break
                     
                     #目標： 確保 opinion 的 tokens 不包含停用詞。
-                    condition4 = True
+                    # condition4 = True
                     # for tk in tokenized[pl: pr+1]:
                     #     # print(tk)
                     #     if tk in self.stop_words:
                     #         condition4 = False
                     #         break
 
-                    conditions = condition1 and condition2 and condition3 and condition4                        
-                    # conditions = condition1 and condition2
+                    # conditions = condition1 and condition2 and condition3 and condition4                        
+                    conditions = condition1 and condition2
 
                     if conditions:
                         # print(f"Triplet found: al={al}, ar={ar}, pl={pl}, pr={pr}, sentiment={sentiment}")
                         # print(f"Aspect range: {tokenized[al:ar+1]}, Opinion range: {tokenized[pl:pr+1]}")
+                        sub_matrix_0 = intensity_pred_matrix[al:ar+1, pl:pr+1 , 0]
+                        sub_matrix_1 = intensity_pred_matrix[al:ar+1, pl:pr+1 , 1]
+                        pred_v = int(round(sub_matrix_0.mean().item() ))
+                        pred_a = int(round(sub_matrix_1.mean().item() ))
+                        triplets.append([ id , al, ar, pl, pr, sentiment,pred_v ,pred_a])
+                        # print(f"pred_v: {pred_v}, pred_a: {pred_a}")
 
-                        triplets.append([al, ar, pl, pr, sentiment])
+                        # triplets.append([al, ar, pl, pr, sentiment])
 
                 # print(triplets)
                 # [[1, 3, 6, 6, 5]]
@@ -197,93 +211,144 @@ class Metric():
     #         for pair in predicted_triplets:
     #             predicted_set.add(id + '-' + '-'.join(map(str, pair)))
     #     return predicted_set, golden_set
+    def predicted_triplets_filter(self, triplets, tokenized_sentence, min_span_length=2):
+        """
+        過濾同一個 ID 下的多個 triplets。
+        
+        :param triplets: triplets 列表，每個 triplet 是列表 [id ,al, ar, pl, pr, sentiment, v, a]
+        :param min_span_length: 最小 span 長度，預設為 2
+        :return: 過濾後的 triplets 列表
+        """
+        filtered = []
+        occupied_aspect = set()
+        occupied_opinion = set()
+        # 按照綜合 span 長度（aspect_len + opinion_len）降序排序
+        
+        triplets_sorted = sorted(
+            triplets,
+            key=lambda x: (x[2] - x[1] + 1) + (x[4] - x[3] + 1),
+            reverse=True
+        )
+        for triplet in triplets_sorted:
+            id , al, ar, pl, pr, sentiment, v, a = triplet
+            
+            aspect_len = ar - al + 1
+            opinion_len = pr - pl + 1
+            # print(f"triplet: {triplet}")
+            # print(f"aspect_len: {aspect_len}")
+            # print(f"opinion_len: {opinion_len}")
+            # 1. 過濾 aspect opinion 都是單個字 
+            if aspect_len < min_span_length and opinion_len < min_span_length:
+                continue
+
+            # 最長的被優先考慮  aspect 或 op 有數字不行
+
+            # 2. 避免重疊的 triplets
+            # 檢查 aspect 是否與已存在的 aspect 重疊
+            if any(pos in occupied_aspect for pos in range(al, ar + 1)):
+                continue
+            # 檢查 opinion 是否與已存在的 opinion 重疊
+            if any(pos in occupied_opinion for pos in range(pl, pr + 1)):
+                continue
+
+            # 如果沒有重疊，則保留 triplet 並標記占用的位置
+            filtered.append(triplet)
+            occupied_aspect.update(range(al, ar + 1))
+            occupied_opinion.update(range(pl, pr + 1))
+        
+        return filtered
 
     #改動起點
     def get_sets(self):
         assert len(self.predictions) == len(self.goldens)
-        p_golden_set = []
+        self.epochcount =  self.epochcount +1
+
         p_predicted_set = []
+        p_pred_temp_set = set()
         golden_set = set()
         predicted_set = set()
+        # 使用字典將 triplets 按 ID 分組
+        p_golden_dict = defaultdict(list)
+        p_predicted_dict = defaultdict(list)
+
         print(f"self.data_num: {self.data_num}, len(self.intensities): {len(self.intensities)}")
 
+        # 針對每句 token做
         for i in range(self.data_num):
-            id = self.ids[i]
+            id_  = self.ids[i]
             tokenized_sentence = self.tokenized[i]
             golden_tuples = self.find_triplet_golden(np.array(self.goldens[i]))
-            
-            # print(f"tokens_ranges: {self.tokens_ranges[i]}")
-            # print(f"tokenized sentence: {self.tokenized[i]}")
-            for golden_tuple in golden_tuples:
-                # print(golden_tuple)
-                # print(f"self.intensities[{i}]: {self.intensities[i]}, type: {type(self.intensities[i])}")
-                # # 对 intensity 进行乘以 10 后取整
-                
-                # print(f"調試 golden_tuple 的形狀: {torch.tensor(self.intensities[i][0]).shape}")
-                # print(f"調試 golden_tuple : {self.intensities[i][0]}")
 
-                rounded_intensity = list(map(int, torch.round(torch.tensor(self.intensities[i][0]) ).tolist()))
-
-                golden_set.add(id + '-' + '-'.join(map(str, golden_tuple)) + '-' + '-'.join(map(str, rounded_intensity)))
-                # print("調試點golden_tuples_triplets:",id + '-' + '-'.join(map(str, golden_tuple)) + '-' + '-'.join(map(str, rounded_intensity)))
-            # print(f"調試點golden_tuples_triplets:{golden_tuples}")
-
-            # Process golden triplets
-            for idx, golden_tuple in enumerate(golden_tuples):
-                # Ensure idx is within the range of intensities
-                if idx < len(self.intensities[i]):
-                    intensity_values = self.intensities[i][idx]  # Already a list
+            # 處理 golden triplets
+            for triplet_index, golden_tuple in enumerate(golden_tuples):
+                if triplet_index < len(self.intensities[i]):
+                    intensity_values = self.intensities[i][triplet_index]  # 已經是列表
+                    
                 else:
-                    intensity_values = [0.0, 0.0]  # Default value if no intensity
-                p_golden_set.append({
-                    'id': id,
-                    'aspect_indices': (golden_tuple[0], golden_tuple[1]),
-                    'opinion_indices': (golden_tuple[2], golden_tuple[3]),
-                    'sentiment': golden_tuple[4],
-                    'intensity': intensity_values
-                })
-            
-            # Process predicted triplets
+                    intensity_values = [0.0, 0.0]  # 如果沒有 intensity，使用預設值
+                intensity_values = [math.floor(x + 0.5) for x in intensity_values]
+                unique_str = f"{id_}-{'-'.join(map(str, golden_tuple))}-{'-'.join(map(str, intensity_values))}"
+                golden_set.add(unique_str)
+
 
             # 獲取 predicted triplets，並新增 Intensity
             tag = np.array(self.predictions[i])
-            tag[0][:] = -1
-            tag[-1][:] = -1
+            tag[0, :] = -1
+            tag[-1, :] = -1
             tag[:, 0] = -1
             tag[:, -1] = -1
-            predicted_triplets = self.find_triplet(tag, self.tokens_ranges[i], self.tokenized[i])
 
-            for pair in predicted_triplets:
-                
-                # print(f"調試 predicted_triplet 的形狀: {self.intensities[i][0]}")
-
-                # print(f"調試 predicted_triplets 的形狀: {torch.tensor(self.intensities[i][0]).shape}")
-
-                # print(f"調試 predicted intensity: {self.predicted_intensities[i][0]}")
-
-                intensity_scores = list(map(int, torch.round(torch.tensor(self.intensities[i][0]) ).tolist()))
-                # print(f"調試 predicted intensity: {intensity_scores[0]}")
-                # print(f"調試 predicted intensity: {intensity_scores[0]}")
-
-                predicted_set.add(id + '-' + '-'.join(map(str, pair)) + '-' + '-'.join(map(str, intensity_scores)))
-
-
-            # print(f"調試點predicted_triplets:{predicted_triplets}")
+            predicted_triplets = self.find_triplet(id_, tag, self.tokens_ranges[i], self.tokenized[i], np.array(self.predicted_intensities[i]))
             
-            for idx, predicted_tuple in enumerate(predicted_triplets):
-                if idx < len(self.predicted_intensities[i]):
-                    intensity_scores = self.predicted_intensities[i][idx]  # Already a list
-                else:
-                    intensity_scores = [0.0, 0.0]  # Default value if no intensity
-                p_predicted_set.append({
-                    'id': id,
-                    'aspect_indices': (predicted_tuple[0], predicted_tuple[1]),
-                    'opinion_indices': (predicted_tuple[2], predicted_tuple[3]),
-                    'sentiment': predicted_tuple[4],
-                    'intensity': intensity_scores
-                })
+            for pair in predicted_triplets:
+                p_pred_temp_set.add('-'.join(map(str, pair)))
+            
+            # 將 predicted_triplets 按 ID 分組
+            for triplet in predicted_triplets:
+                p_predicted_dict[id_].append(triplet)
+
+        if self.epochcount >150:
+            print(f"Go filter ! epoch{self.epochcount}")
         
-        return p_predicted_set, p_golden_set ,predicted_set, golden_set 
+            # 遍歷 predicted_dict，應用過濾規則並更新 predicted_set 和 p_predicted_set
+            for id_, triplets in p_predicted_dict.items():
+                if len(triplets) > 1:
+                    print(f"id_: {id_}, triplets: {triplets}")
+                    print(f"number of triplets: {len(triplets)}")
+
+                    print("Go filter!")
+                    # 只對有多個 triplets 的 ID 進行過濾
+                    filtered_triplets = self.predicted_triplets_filter(triplets, self.tokenized[self.ids.index(id_)])
+                    print(f"filtered_triplets: {filtered_triplets}")
+
+                else:
+                    # 如果只有一個 triplet，直接保留
+                    # print(f"triplets in else: {triplets}")
+                    filtered_triplets = triplets
+                    # print(f"filtered_triplets: {filtered_triplets}")
+
+                for triplet in filtered_triplets:
+                    # print(f"filtered_triplets's item: {triplet}")
+                    # triplet has [id, al, ar, pl, pr, sentiment, v, a]
+                    # 創建唯一標識符
+                    unique_str = f"{triplet[0]}-{triplet[1]}-{triplet[2]}-{triplet[3]}-{triplet[4]}-{triplet[5]}-{triplet[6]}-{triplet[7]}"
+                    predicted_set.add(unique_str)
+                    # 添加到 p_predicted_set
+                    p_predicted_set.append({
+                        'id': triplet[0],
+                        'aspect_indices': (triplet[1], triplet[2]),
+                        'opinion_indices': (triplet[3], triplet[4]),
+                        'sentiment': triplet[5],
+                        'intensity': [triplet[6], triplet[7]]
+                    })
+        else:
+            predicted_set =  p_pred_temp_set
+
+        print(f"Total Golden Triplets after filtering: {len(golden_set)}")
+        print(f"Total Predicted Triplets before filtering: {len(p_pred_temp_set)}")
+        print(f"Total Predicted Triplets after filtering: {len(predicted_set)}")
+
+        return p_predicted_set, predicted_set, golden_set 
 
 
     def extract_and_print_triplets(self, predicted_set):

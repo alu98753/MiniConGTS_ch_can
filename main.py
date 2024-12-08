@@ -52,7 +52,7 @@ if __name__ == '__main__':
     parser.add_argument('--class_num', type=int, default=5, help='label number')
     parser.add_argument('--task', type=str, default="triplet", choices=["pair", "triplet"], help='option: pair, triplet')
     parser.add_argument('--model_save_dir', type=str, default="/mnt/md0/chen-wei/zi/MiniConGTS_copy_ch_cantrain/modules/models/saved_models/", help='model path prefix')
-    parser.add_argument('--log_path', type=str, default=None, help='log path')
+    parser.add_argument('--log_path', type=str, default="/mnt/md0/chen-wei/zi/MiniConGTS_chinese_can/log/", help='log path')
 
     parser.add_argument('--mode', type=str, default='train', choices=['train', 'predict'], help='模式：train 或 predict')
     parser.add_argument('--input_file', type=str, default='/mnt/md0/chen-wei/zi/MiniConGTS_copy/data/D1/res14/NYCU_NLP_113A_Validation.txt', help='预测模式下的输入文件')
@@ -60,8 +60,9 @@ if __name__ == '__main__':
 
 
     args = parser.parse_known_args()[0]
-    if args.log_path is None:
-        args.log_path = 'log_{}_{}_{}.log'.format(args.data_version, args.dataset, datetime.datetime.now().strftime('%Y-%m-%d-%H-%M'))
+    # if args.log_path is None:
+    args.log_path = '{}log_{}_{}_{}.log'.format(args.log_path,args.data_version, args.dataset, datetime.datetime.now().strftime('%Y-%m-%d-%H-%M'))
+    print(args.log_path)
 #/mnt/md0/chen-wei/zi/MiniConGTS_copy/log/
     #加载预训练字典和分词方法
     # tokenizer = RobertaTokenizer.from_pretrained(args.model_name_or_path,
@@ -70,7 +71,7 @@ if __name__ == '__main__':
     # )
 
     tokenizer = BertTokenizer.from_pretrained("hfl/chinese-roberta-wwm-ext")
-    # tokenizer = RobertaModel.from_pretrained("hfl/chinese-roberta-wwm-ext")
+    # tokenizer = RobertaTokenizer.from_pretrained("brightmart/roberta-large-chinese")
 
     logging = Logging(file_name=args.log_path).logging
 
@@ -123,7 +124,8 @@ if __name__ == '__main__':
                     {'params': model.bert.parameters(), 'lr': 1e-5},
                     {'params': model.linear1.parameters(), 'lr': 1e-2},
                     {'params': model.cls_linear.parameters(), 'lr': 1e-3},
-                    {'params': model.cls_linear1.parameters(), 'lr': 1e-3}
+                    {'params': model.cls_linear1.parameters(), 'lr': 1e-3},
+                    {'params': model.intensity_head.parameters(), 'lr': 1e-4}
                 ], lr=1e-3)#SGD, momentum=0.9
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[200, 600, 1000], gamma=0.5, verbose=True)
 
@@ -244,7 +246,7 @@ if __name__ == '__main__':
                         [intensity_matrix]
                     )
 
-                    p_predicted_set, _, _, _ = metric.get_sets()
+                    p_predicted_set, _, _ = metric.get_sets()
 
                     triplets = []
                     for triplet_info in p_predicted_set:
@@ -273,7 +275,7 @@ if __name__ == '__main__':
     elif args.mode == 'predict':
         # Load the pre-trained model
         # saved_model_path = os.path.join(args.model_save_dir, "best_model_ch_best.pt")
-        saved_model_path = os.path.join(r"E:\NYCU-Project\Class\NLP\MiniConGTS_copy_ch_cantrain\modules\models\saved_models\best_model_ch_best.pt")
+        saved_model_path = os.path.join(r"E:\NYCU-Project\Class\NLP\MiniConGTS_copy_chinese_can\modules\models\saved_models\best_model_ch.pt")
         
         if not os.path.exists(saved_model_path):
             raise FileNotFoundError(f"模型文件 {saved_model_path} 未找到。")

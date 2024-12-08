@@ -55,11 +55,12 @@ class Trainer():
         self.bear_max = bear_max
         self.last = last
         self.contrastive = True
-      
-        self.gamma_base = 0.0000001  # gamma 初始值
-        self.alpha = 0.2  # 冪次增長速度參數
-        self.threshold = 55  # triplet_intensity_f1 的臨界值
-        self.wait_epochs = 10  # triplet_intensity_f1 需超過閾值的連續 epoch 數
+
+        self.maxgamma = 1
+        self.gamma_base = 0.1  # gamma 初始值  0.00000001 會收斂比主任務慢 還行
+        self.alpha = 0.2  # 冪次增長速度參數 原: 0.2   ,0.4?
+        self.threshold = 35  # pair f1 的臨界值 45?
+        self.wait_epochs = 10  # pair f1 需超過閾值的連續 epoch 數
         self.above_threshold_count = 0  # 初始化計數器
       
     def train(self):
@@ -116,7 +117,7 @@ class Trainer():
 
             # 如果計數器達到條件，逐漸增長 gamma
             if self.above_threshold_count >= self.wait_epochs:
-                gamma = self.gamma_base * math.exp(self.alpha * (self.above_threshold_count - self.wait_epochs))
+                gamma = max(self.gamma_base * math.exp(self.alpha * (self.above_threshold_count - self.wait_epochs)), self.maxgamma )
             else:
                 gamma = self.gamma_base
             self.logging(f"Epoch {i + 1}: triplet_intensity_f1 = {triplet_intensity_f1}, gamma = {gamma:.6f}, above_threshold_count = {self.above_threshold_count}")
@@ -241,22 +242,22 @@ class Trainer():
             if triplet_intensity_f1 > self.best_triplet_intensity_f1:
                 self.best_triplet_intensity_f1 = joint_f1
                 self.best_joint_epoch = i
-                if triplet_intensity_f1_test > self.best_triplet_intensity_f1_test:
+            if triplet_intensity_f1_test > self.best_triplet_intensity_f1_test:
 
-                    if triplet_intensity_f1_test > 50.0:
+                if triplet_intensity_f1_test > 45.0:
+                
+                    # Ensure the directory exists
+                    model_dir = os.path.dirname(self.args.model_save_dir)
+                    if not os.path.exists(model_dir):
+                        os.makedirs(model_dir)
+                    # model_path = self.args.model_save_dir + self.args.data_version + "-" + self.args.dataset + "-" + str(round(joint_f1_test, 4)) + "-" + 'epoch' + str(i) + '.pt'
+                    model_path = self.args.model_save_dir + "-" + str(round(triplet_intensity_f1_test, 4)) + "-" + 'epoch' + str(i) + '.pt'
+                    # model_path = self.args.model_save_dir + "best_model_ch.pt"
+                    torch.save(self.model, model_path)
+                    self.logging(f"Model saved at {model_path}")
                     
-                        # Ensure the directory exists
-                        model_dir = os.path.dirname(self.args.model_save_dir)
-                        if not os.path.exists(model_dir):
-                            os.makedirs(model_dir)
-                        # model_path = self.args.model_save_dir + self.args.data_version + "-" + self.args.dataset + "-" + str(round(joint_f1_test, 4)) + "-" + 'epoch' + str(i) + '.pt'
-                        model_path = self.args.model_save_dir + "-" + str(round(joint_f1_test, 4)) + "-" + 'epoch' + str(i) + '.pt'
-                        # model_path = self.args.model_save_dir + "best_model_ch.pt"
-                        torch.save(self.model, model_path)
-                        self.logging(f"Model saved at {model_path}")
-                        
-                        self.best_triplet_intensity_f1_test = triplet_intensity_f1_test
-                        self.best_joint_epoch_test = i
+                    self.best_triplet_intensity_f1_test = triplet_intensity_f1_test
+                    self.best_joint_epoch_test = i
 
             if (j + 1) % 5 ==0:
                 gc.collect()  # 清理 Python 中的未引用对象

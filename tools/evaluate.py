@@ -5,7 +5,7 @@ from tools.metric import Metric
 
 from utils.eval_utils import get_triplets_set
 
-
+import numpy as np
 
 def evaluate(model, dataset, stop_words, logging, args):
     model.eval()
@@ -60,7 +60,11 @@ def evaluate(model, dataset, stop_words, logging, args):
         # print(f"調試all_intensities：{list(all_intensities)[0]}")  # 取第一個元素
         # print(f"調試all_ids：{list(all_ids)[0]}")  # 取第一個元素
         # print(f"調試all_labels{list(all_labels)[0]}")  # 取第一個元素
+                
+        print(np.array(all_intensities).shape) # (907, 1, 2)
+        print(np.array(all_intensity_logits).shape) # (907, 80, 80, 2)
 
+        
         # 引入 metric 计算评价指标
         # metric = Metric(args, stop_words, all_tokenized, all_ids, all_preds, all_labels, all_sens_lengths, all_token_ranges, ignore_index=-1, logging=logging)
                 # 引入 Metric 並傳遞 intensity 數據
@@ -68,7 +72,7 @@ def evaluate(model, dataset, stop_words, logging, args):
                         all_sens_lengths, all_token_ranges, 
                         all_intensities, all_intensity_logits, logging=logging)
 
-        p_predicted_set, p_golden_set ,predicted_set, golden_set = metric.get_sets()
+        p_predicted_set ,predicted_set, golden_set = metric.get_sets()
         # for i in range(5):
         # Call the method to extract and print triplets
         # metric.extract_and_print_triplets(p_predicted_set)

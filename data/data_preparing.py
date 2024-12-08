@@ -5,6 +5,8 @@ import os
 import copy
 import torch.nn.functional as F
 from transformers import BertTokenizer
+from transformers import RobertaTokenizer, RobertaModel
+
 import logging
 import numpy as np
 
@@ -576,6 +578,7 @@ if __name__ == "__main__":
 
     #加载预训练字典和分词方法
     tokenizer = BertTokenizer.from_pretrained("hfl/chinese-roberta-wwm-ext")
+    # tokenizer = RobertaTokenizer.from_pretrained("brightmart/roberta-large-chinese")
 
     # tokenizer = RobertaTokenizer.from_pretrained("roberta-base",
     #     cache_dir="../modules/models/",  # 将数据保存到的本地位置，使用cache_dir 可以指定文件下载位置
