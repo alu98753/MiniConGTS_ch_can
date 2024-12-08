@@ -56,7 +56,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--mode', type=str, default='train', choices=['train', 'predict'], help='模式：train 或 predict')
     parser.add_argument('--input_file', type=str, default='/mnt/md0/chen-wei/zi/MiniConGTS_copy/data/D1/res14/NYCU_NLP_113A_Validation.txt', help='预测模式下的输入文件')
-    parser.add_argument('--output_file', type=str, default='submission.txt', help='预测结果输出文件')
+    parser.add_argument('--output_file', type=str, default=r'E:\NYCU-Project\MiniConGTS_chinese_can\submission.txt', help='预测结果输出文件')
 
 
     args = parser.parse_known_args()[0]
@@ -159,33 +159,7 @@ if __name__ == '__main__':
     beta_2 = 0.5  # Weight for contrastive loss
     bear_max = 5  # Maximum patience before enabling contrastive learning
     last = 10     # Duration for which contrastive learning remains active
-    # trainer = Trainer(model, trainset, devset, testset, optimizer, (f_loss, f_loss1), lr_scheduler, args, logging)
-
-
-    
     # Run evaluation
-
-    # Load a pre-trained model for evaluation
-    # saved_model_path = "/mnt/md0/chen-wei/zi/MiniConGTS_copy/modules/models/saved_models/best_model_ch.pt"
-    # saved_model_path = "/mnt/md0/chen-wei/zi/MiniConGTS_copy/modules/models/saved_models/best_model_eng.pt"
-    
-    
-    # if os.path.exists(saved_model_path):
-    #     logging(f"Loading model from {saved_model_path}")
-    #     model = torch.load(saved_model_path)
-    #     model = model.to(args.device)
-    # else:
-    #     logging(f"Error: Model file {saved_model_path} does not exist.")
-    #     exit(1)
-
-    # # Ensure the model is in evaluation mode
-    # model.eval()
-
-    # # Run evaluation
-    # precision, recall, f1 = evaluate(model, testset, stop_words, logging, args)
-    # logging(f"Precision: {precision}, Recall: {recall}, F1: {f1}")
-    
-    
     
     ######################
     def predict_sentences(model, tokenizer, sentences, args):
@@ -265,6 +239,178 @@ if __name__ == '__main__':
 
         return results
 
+
+    def predict_from_file(input_file, output_file, model, tokenizer, mean, std, args):
+        # 讀取檔案
+        lines = open(input_file, 'r', encoding='utf-8').read().strip().split('\n')
+        # 第一行為標頭，可略過
+        lines = lines[1:] 
+        
+        sentences = []
+        ids = []
+        for line in lines:
+            # 分割ID和Sentence
+            # 假設格式為 "R3530:S002, 肉片有厚實的口感。"
+            parts = line.split(',', 1)  # 以第一個逗號分割
+            sentence_id = parts[0].strip()
+            sentence = parts[1].strip()
+            
+            ids.append(sentence_id)
+            sentences.append(sentence)
+
+        # 呼叫您寫好的預測函式 (類似 predict_sentences，但需微調)
+        results = predict_sentences_no_tags(model, tokenizer, sentences, mean, std, args)
+        # 將results與ids結合並輸出
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write("ID Triplets\n")
+
+            current_id = None
+            current_sentence = None
+            triplets_str_list = []
+
+            for i, res in enumerate(results):
+                sid = ids[i]
+                sentence = sentences[i]
+
+                # 如果是第一次進入或發現新的ID就先把之前的輸出
+                if current_id is not None and sid != current_id:
+                    # 把累積的三元組串接起來
+                    final_triplets_str = ''.join(triplets_str_list)
+                    f.write(f"{current_id} {final_triplets_str}\n")
+                    # 重置累積區
+                    triplets_str_list = []
+
+                # 更新目前處理的ID與句子（同一ID下應該是同一句話，如果多句需要另行考量）
+                current_id = sid
+                current_sentence = sentence
+
+                # 如果沒有三元組仍要輸出該行
+                if len(res['triplets']) == 0:
+                    # 沒有三元組，直接輸出該行（無三元組部分）
+                    # f.write(f"{sid}, {sentence}\n")
+                    continue
+                else:
+                    # 有三元組，累積起來
+                    for triplet in res['triplets']:
+                        aspect_words, opinion_words, intensity_str = triplet
+                        aspect = "".join(aspect_words)
+                        opinion = "".join(opinion_words)
+                        # 按照指定格式 (aspect,opinion,intensity_str)
+                        triplets_str_list.append(f"({aspect},{opinion},{intensity_str})")
+
+            # 迴圈結束後，若仍有剩餘的triplets，將最後的ID行輸出
+            if current_id is not None and len(triplets_str_list) > 0:
+                final_triplets_str = ''.join(triplets_str_list)
+                f.write(f"{current_id} {final_triplets_str}\n")
+
+
+    def find_triplets_from_preds(tag_matrix, tokens):
+        # tag_matrix: [max_len, max_len] from preds
+        # 用和訓練時相同的邏輯: sentiment2id = {'negative': 2, 'neutral': 3, 'positive': 4}
+        # 在 tag_matrix 中，若 tag_matrix[i][j] in {2,3,4} 表示在 (i,j) 有一個 sentiment連接
+        # 並往下/右擴展找出完整 aspect 和 opinion span。
+        # 這裡直接使用之前的 find_triplet() 程式碼邏輯。
+        sentiment_ids = [2,3,4]
+        triplets = []
+        max_len = tag_matrix.shape[0]
+        for i in range(1, max_len-1):
+            for j in range(1, max_len-1):
+                if i!=j and tag_matrix[i][j] in sentiment_ids:
+                    sentiment = tag_matrix[i][j]
+                    # 往下和右擴展找 aspect/opinion
+                    # 假設和訓練相同的擴展規則:
+                    al, ar = i, i
+                    pl, pr = j, j
+                    while ar+1 < max_len and tag_matrix[ar+1][pr] == 1:
+                        ar += 1
+                    while pr+1 < max_len and tag_matrix[ar][pr+1] == 1:
+                        pr += 1
+                    triplets.append([al, ar, pl, pr, sentiment])
+
+        return triplets
+
+
+    def predict_sentences_no_tags(model, tokenizer, sentences, mean, std, args):
+        model.eval()
+        results = []
+        batch_size = args.batch_size
+
+        with torch.no_grad():
+            for batch_start in range(0, len(sentences), batch_size):
+                batch_sentences = sentences[batch_start:batch_start + batch_size]
+                encoded = tokenizer(
+                    batch_sentences,
+                    padding="max_length",
+                    truncation=True,
+                    max_length=args.max_sequence_len,
+                    return_tensors='pt'
+                )
+
+                tokens_tensor = encoded['input_ids'].to(args.device)
+                attention_mask = encoded['attention_mask'].to(args.device)
+                masks_tensor = attention_mask.unsqueeze(1) * attention_mask.unsqueeze(2)
+
+                # 前向傳遞
+                logits, logits1, sim_matrix, intensity_logits = model(tokens_tensor, masks_tensor)
+                
+                preds = torch.argmax(logits, dim=3)
+                # intensity_logits shape: [batch, max_len, max_len, 2]
+                # 反標準化:
+                # intensity_predictions = intensity_logits * std + mean (若訓練有標準化)
+                # 若訓練時已將intensity壓到[0,1]或其他範圍，同樣在此反轉
+                intensity_predictions = intensity_logits * std + mean
+
+                for idx, sentence in enumerate(batch_sentences):
+                    # 將 token id 轉回 tokens
+                    tokens = tokenizer.convert_ids_to_tokens(tokens_tensor[idx])
+
+                    # 解析 triplet
+                    pred_matrix = preds[idx].cpu().numpy()
+                    # intensity_pred 的 shape: [max_len, max_len, 2]
+                    intensity_pred = intensity_predictions[idx].cpu().numpy()
+
+                    # 找出 triplets
+                    triplets = find_triplets_from_preds(pred_matrix, tokens)
+
+                    # 將對應的 triplets 從 intensity_pred 中取出強度值
+                    extracted_triplets = []
+                    for (al, ar, pl, pr, sentiment) in triplets:
+                        # 平均該 (aspect, opinion) 區域的intensity 或取首位置
+                        # 例如取 (al,pl) 的 intensity
+                        valence = intensity_pred[al, pl, 0]
+                        arousal = intensity_pred[al, pl, 1]
+
+                        # 格式化成 v#a，保留兩位小數
+                        intensity_str = f"{valence:.2f}#{arousal:.2f}"
+
+                        aspect_words = tokens[al:ar+1]
+                        opinion_words = tokens[pl:pr+1]
+                        extracted_triplets.append((aspect_words, opinion_words, intensity_str))
+
+                    results.append({
+                        'sentence': sentence,
+                        'triplets': extracted_triplets
+                    })
+        return results
+
+
+        # 將results與ids結合並輸出
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write("ID, Sentence, Aspect, Opinion, Intensity\n")
+            for i, res in enumerate(results):
+                sid = ids[i]
+                sentence = sentences[i]
+                # res['triplets'] = [(aspect_words, opinion_words, intensity_str), ...]
+                if len(res['triplets']) == 0:
+                    # 沒有三元組也可輸出 (ID, sentence) 或略過
+                    continue
+                for triplet in res['triplets']:
+                    aspect_words, opinion_words, intensity_str = triplet
+                    aspect = "".join(aspect_words)
+                    opinion = "".join(opinion_words)
+                    f.write(f"{sid}, {sentence}, {aspect}, {opinion}, {intensity_str}\n")
+
+
     if args.mode == 'train':
         # Run train
         trainer = Trainer(model, trainset, devset, testset, optimizer, (f_loss, f_loss1), lr_scheduler, args, logging, beta_1, beta_2, bear_max, last)
@@ -273,34 +419,55 @@ if __name__ == '__main__':
     elif args.mode == 'predict':
         # Load the pre-trained model
         # saved_model_path = os.path.join(args.model_save_dir, "best_model_ch_best.pt")
-        saved_model_path = os.path.join(r"E:\NYCU-Project\Class\NLP\MiniConGTS_copy_ch_cantrain\modules\models\saved_models\best_model_ch_best.pt")
+        saved_model_path = os.path.join(r"E:\NYCU-Project\MiniConGTS_chinese_can\modules\models\saved_models\-48.2201-epoch383.pt")
         
         if not os.path.exists(saved_model_path):
             raise FileNotFoundError(f"模型文件 {saved_model_path} 未找到。")
+        model = Model(args)
         model = torch.load(saved_model_path)
         model = model.to(args.device)
         model.eval()
 
+        # model = Model(args)  # 重新實例化模型
+        # model.load_state_dict(torch.load(saved_model_path))
+        # model = model.to(args.device)
+        # model.eval()
+
+        # 載入 tokenizer（根據您原程式碼邏輯）
+        tokenizer = BertTokenizer.from_pretrained("hfl/chinese-roberta-wwm-ext")
+
+        # 設定輸入與輸出檔案路徑
+        input_file = r"E:\NYCU-Project\MiniConGTS_chinese_can\data\D1\res14\NYCU_NLP_113A_Test.txt"
+
+        mean = 5
+        std = 0.9
+        output_file = "submission.txt"
+        predict_from_file(input_file, output_file, model, tokenizer, mean, std, args)
+        print(f"預測完成，結果已輸出至 {args.output_file}")
+
+
+
         # Load input sentences
         ## 需改動:
-        with open(r"E:\NYCU-Project\Class\NLP\MiniConGTS_copy_ch_cantrain\data\D1\res14\NYCU_NLP_113A_Validation.txt", 'r', encoding='utf-8') as f:
-            lines = [line.strip().split(',', 1) for line in f.readlines()]
+        # with open(r"E:\NYCU-Project\Class\NLP\MiniConGTS_copy_ch_cantrain\data\D1\res14\NYCU_NLP_113A_Validation.txt", 'r', encoding='utf-8') as f:
+        
+        #     lines = [line.strip().split(',', 1) for line in f.readlines()]
 
-        if not all(len(line) == 2 for line in lines):
-            raise ValueError("输入文件中的每一行必须包含两个逗号分隔的列：'ID, Sentence'。")
+        # if not all(len(line) == 2 for line in lines):
+        #     raise ValueError("输入文件中的每一行必须包含两个逗号分隔的列：'ID, Sentence'。")
 
-        ids = [line[0] for line in lines]
-        sentences = [line[1] for line in lines]
+        # ids = [line[0] for line in lines]
+        # sentences = [line[1] for line in lines]
 
-        # Process sentences in batches
-        results = predict_sentences(model, tokenizer, sentences, args)
+        # # Process sentences in batches
+        # results = predict_sentences(model, tokenizer, sentences, args)
 
-        # Save results to output file
-        with open(args.output_file, 'w', encoding='utf-8') as f:
-            f.write(f"ID Triplets\n")
-            for id_, result in zip(ids, results):
-                triplets_str = "".join([f"({''.join(t[0])},{''.join(t[1])},{t[2]})" for t in result['triplets']])
-                f.write(f"{id_} {triplets_str}\n")
+        # # Save results to output file
+        # with open(args.output_file, 'w', encoding='utf-8') as f:
+        #     f.write(f"ID Triplets\n")
+        #     for id_, result in zip(ids, results):
+        #         triplets_str = "".join([f"({''.join(t[0])},{''.join(t[1])},{t[2]})" for t in result['triplets']])
+        #         f.write(f"{id_} {triplets_str}\n")
 
         print(f"预测结果已保存到 {args.output_file}")
 
